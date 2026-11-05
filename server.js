@@ -1,5 +1,5 @@
 const express = require("express")
-
+const db = require("./db");
 const app = express();
 const PORT = 3000;
 
@@ -13,24 +13,31 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-
-const resources = [
+app.param("id", (req, res, next, value) => {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id < 1 || id > 2147483647)
     {
-        id : 1, title: "Turn in homrwork", completed: false
-    },
+        return res.status(404).json({error: "Resource not found"});
+    }
 
-];
-
-let nextID = 2;
-
-app.get("/api/resources", (req, res) => {
-    res.json(resources);
+    req.itemID = id;
+    next();
 });
 
-app.get("/api/resources/:id", (req, res) => {
-    const id = Number(req.params.id);
+app.get("/api/items", async (req, res) => {
+    const result = await db.query(
+        "SELECT id, title, completed FROM items ORDER BY id"
+    );
 
-    const resource = resources.find((item) => item.id ===id);
+    res.json(result.rows);
+});
+
+app.get("/api/items/:id", async (req, res) => {
+    const result = await db.query(
+        "SELECT id, title, completed FROM items WHERE id = $1",
+        [req.itemID]
+    );
+    const resource = result.rows[0];
     if (!resource)
     {
         return res.status(404).json({
@@ -40,7 +47,7 @@ app.get("/api/resources/:id", (req, res) => {
     res.json(resource);
 })
 
-app.post("/api/resources", (req, res) => {
+app.post("/api/items", async (req, res) => {
     const {title, completed = false} = req.body ?? {};
     if (typeof title !== "string" || title.trim() === "")
     {
@@ -58,33 +65,22 @@ app.post("/api/resources", (req, res) => {
             }
         );
     }
-    const newResource = {
-        id: nextID++,
-        title: title.trim(),
-        completed: completed
-    };
 
-    resources.push(newResource);
+    const result = await db.query(
+        "INSERT INTO items (title, completed) VALUES ($1, $2) RETURNING id, title, completed",
+        [title.trim(), completed]
+    );
 
-    res.status(201).json(newResource);
+    res.status(201).json(result.rows[0]);
 });
 
-app.put("/api/resources/:id", (req,res) => {
-    const id = Number(req.params.id);
-    const resource = resources.find((item) => item.id === id);
-
-    if (!resource)
-    {
-        return res.status(404).json(
-            {
-                error: "resource not found"
-            }
-        );
-    }
-
+app.put("/api/items/:id", async (req,res) => {
     const {title, completed} = req.body ?? {};
-
-    if (typeof title !== "string" || title.trim() === "")
+    if (title === undefined && completed === undefined)
+    {
+        return res.status(400).json({error: "title or completed is required"});
+    }
+    if (title !== undefined && (typeof title !== "string" || title.trim() === ""))
     {
         return res.status(400).json(
             {
@@ -92,7 +88,7 @@ app.put("/api/resources/:id", (req,res) => {
             }
         );
     }
-    if (typeof completed !== "boolean")
+    if (completed !== undefined && typeof completed !== "boolean")
     {
         return res.status(400).json(
             {
@@ -101,18 +97,22 @@ app.put("/api/resources/:id", (req,res) => {
         );
     }
 
-        resource.title = title.trim();
-        resource.completed = completed;
+    const result = await db.query(
+        "UPDATE items SET title = COALESCE($1, title), completed = COALESCE($2, completed) WHERE id = $3 RETURNING id, title, completed",
+        [title?.trim() ?? null, completed ?? null, req.itemID]
+    );
+    const resource = result.rows[0];
+    if (!resource)
+    {
+        return res.status(404).json({error: "resource not found"});
+    }
 
-        res.json(resource);
-    
+    res.json(resource);
 })
 
-app.delete("/api/resources/:id", (req, res) => {
-    const id = Number(req.params.id);
-
-    const index = resources.findIndex((item) => item.id === id);
-    if (index === -1)
+app.delete("/api/items/:id", async (req, res) => {
+    const result = await db.query("DELETE FROM items WHERE id = $1", [req.itemID]);
+    if (result.rowCount === 0)
     {
         return res.status(404).json(
             {
@@ -121,7 +121,6 @@ app.delete("/api/resources/:id", (req, res) => {
         );
     }
 
-    resources.splice(index, 1);
     res.status(204).send();
 })
 
